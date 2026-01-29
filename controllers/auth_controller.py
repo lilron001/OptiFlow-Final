@@ -42,21 +42,30 @@ class AuthController:
         }
         
         # Send verification email
-        success, code = self.email_service.send_verification_email(email, username)
+        success, code, email_sent = self.email_service.send_verification_email(email, username)
         if success:
-            # Show message without displaying the code
-            msg = (
-                f"✅ Registration Successful!\n\n"
-                f"A verification code has been sent to:\n{email}\n\n"
-                f"⏱️ The code expires in 10 minutes.\n"
-                f"📧 Please check your email and enter the code on the next screen."
-            )
+            if not email_sent:
+                # Fallback message for failed/unconfigured email
+                msg = (
+                    f"⚠️ Email delivery failed or not configured.\n\n"
+                    f"Here is your verification code for testing:\n"
+                    f"👉 {code}\n\n"
+                    f"Please enter this code on the next screen."
+                )
+            else:
+                # standard message
+                msg = (
+                    f"✅ Registration Successful!\n\n"
+                    f"A verification code has been sent to:\n{email}\n\n"
+                    f"⏱️ The code expires in 10 minutes.\n"
+                    f"📧 Please check your email and enter the code on the next screen."
+                )
             
-            MessageBox.showinfo("Verification Code Sent", msg)
+            MessageBox.showinfo("Verification", msg)
             return True
         else:
             del self.pending_verification[email]
-            MessageBox.showerror("Error", "Failed to send verification email. Please check your email settings.")
+            MessageBox.showerror("Error", "Failed to generate verification code.")
             return False
     
     def verify_email(self, email: str, code: str) -> bool:
@@ -131,17 +140,26 @@ class AuthController:
         }
         
         # Send password reset email
-        success, code = self.email_service.send_password_reset_email(user['email'], username)
+        success, code, email_sent = self.email_service.send_password_reset_email(user['email'], username)
         if success:
-            # Show message without displaying the code
-            msg = (
-                f"✅ Password Reset Initiated!\n\n"
-                f"A reset code has been sent to:\n{user['email']}\n\n"
-                f"⏱️ The code expires in 15 minutes.\n"
-                f"📧 Please check your email and enter the code on the next screen."
-            )
+            if not email_sent:
+                # Fallback message
+                msg = (
+                    f"⚠️ Email delivery failed or not configured.\n\n"
+                    f"Here is your reset code for testing:\n"
+                    f"👉 {code}\n\n"
+                    f"Please enter this code on the next screen."
+                )
+            else:
+                # Show message without displaying the code
+                msg = (
+                    f"✅ Password Reset Initiated!\n\n"
+                    f"A reset code has been sent to:\n{user['email']}\n\n"
+                    f"⏱️ The code expires in 15 minutes.\n"
+                    f"📧 Please check your email and enter the code on the next screen."
+                )
                 
-            MessageBox.showinfo("Reset Code Sent", msg)
+            MessageBox.showinfo("Reset Code", msg)
             return True
         else:
             del self.pending_verification[f"reset_{user['email']}"]

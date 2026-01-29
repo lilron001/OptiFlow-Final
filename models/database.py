@@ -87,7 +87,8 @@ class TrafficDB:
                 "violation_type": violation_type,
                 "lane": lane,
                 "source": source,
-                "timestamp": datetime.utcnow().isoformat()
+                # "reported_by": None,  # Optional: Pass User ID if available
+                "created_at": datetime.utcnow().isoformat()
             }
             response = self.supabase.table("violations").insert(data).execute()
             self.save_system_log("VIOLATION_DETECTED", f"{violation_type} on lane {lane}")
@@ -101,7 +102,7 @@ class TrafficDB:
         try:
             response = self.supabase.table("violations")\
                 .select("*, vehicles(*)")\
-                .order("timestamp", desc=True)\
+                .order("created_at", desc=True)\
                 .limit(limit)\
                 .execute()
             return response.data
@@ -116,13 +117,19 @@ class TrafficDB:
                      reported_by: str = None) -> Optional[str]:
         """Save accident detection"""
         try:
+            # Ensure severity case matches CHECK constraint
+            severity = severity.capitalize() 
+            if severity not in ['Minor', 'Moderate', 'Severe']:
+                severity = 'Moderate'
+            
             data = {
                 "lane": lane,
                 "severity": severity,
                 "detection_type": detection_type,
                 "description": description,
-                "reported_by": reported_by,
-                "timestamp": datetime.utcnow().isoformat()
+                # "reported_by": reported_by, # Needs valid UUID, better to leave null for system
+                "status": "pending",
+                "created_at": datetime.utcnow().isoformat()
             }
             response = self.supabase.table("accidents").insert(data).execute()
             self.save_system_log("ACCIDENT_DETECTED", f"Accident on lane {lane} - {severity}")
@@ -131,12 +138,25 @@ class TrafficDB:
             self.logger.error(f"Error saving accident: {e}")
             return None
     
+    def get_recent_accidents(self, limit: int = 50) -> List[Dict]:
+        """Get recent accidents"""
+        try:
+            response = self.supabase.table("accidents")\
+                .select("*")\
+                .order("created_at", desc=True)\
+                .limit(limit)\
+                .execute()
+            return response.data
+        except Exception as e:
+            self.logger.error(f"Error fetching accidents: {e}")
+            return []
+    
     def get_accident_stats(self, hours: int = 24) -> Dict[str, Any]:
         """Get accident statistics"""
         try:
             response = self.supabase.table("accidents")\
                 .select("*")\
-                .gte("timestamp", f"now() - interval '{hours} hours'")\
+                .gte("created_at", f"now() - interval '{hours} hours'")\
                 .execute()
             
             accidents = response.data
@@ -166,7 +186,7 @@ class TrafficDB:
                 "vehicle_type": vehicle_type,
                 "lane": lane,
                 "action_taken": action_taken,
-                "timestamp": datetime.utcnow().isoformat()
+                "created_at": datetime.utcnow().isoformat()
             }
             response = self.supabase.table("emergency_events").insert(data).execute()
             return response.data[0]['event_id']
@@ -227,7 +247,7 @@ class TrafficDB:
             data = {
                 "event_type": event_type,
                 "description": description,
-                "timestamp": datetime.utcnow().isoformat()
+                "created_at": datetime.utcnow().isoformat()
             }
             self.supabase.table("system_logs").insert(data).execute()
         except Exception as e:

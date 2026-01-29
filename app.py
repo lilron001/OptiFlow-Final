@@ -238,7 +238,8 @@ class AppManager:
         main_controller = MainController(container, None, self.db, current_user, 
                                        auth_controller=self.auth,
                                        on_logout_callback=self.handle_logout,
-                                       violation_controller=controllers['violation'])
+                                       violation_controller=controllers['violation'],
+                                       accident_controller=controllers['accident'])
         controllers['main'] = main_controller
         
         # Initialize main window for traffic monitoring in a frame

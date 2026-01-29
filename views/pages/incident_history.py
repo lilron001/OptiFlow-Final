@@ -6,18 +6,36 @@ from ..styles import Colors, Fonts
 class IncidentHistoryPage:
     """Incident history page with past events"""
     
-    def __init__(self, parent):
+    def __init__(self, parent, controller=None):
         self.parent = parent
+        self.controller = controller
         self.frame = tk.Frame(parent, bg=Colors.BACKGROUND)
+        self.tree = None
         self.create_widgets()
+        
+        # Load data if controller is available
+        if self.controller:
+            self.load_data()
     
     def create_widgets(self):
         """Create incident history page layout"""
+        # Header Frame
+        header = tk.Frame(self.frame, bg=Colors.BACKGROUND)
+        header.pack(fill=tk.X, pady=15, padx=20)
+        
         # Title
-        title = tk.Label(self.frame, text="Incident History",
+        title = tk.Label(header, text="Incident History",
                         font=Fonts.TITLE, bg=Colors.BACKGROUND,
                         fg=Colors.PRIMARY)
-        title.pack(pady=15)
+        title.pack(side=tk.LEFT)
+        
+        # Refresh Button
+        refresh_btn = tk.Button(header, text="🔄 Refresh",
+                              command=self.load_data,
+                              font=Fonts.BODY,
+                              bg=Colors.SECONDARY, fg=Colors.TEXT,
+                              relief=tk.FLAT, padx=15, pady=5)
+        refresh_btn.pack(side=tk.RIGHT)
         
         # Main content
         content_frame = tk.Frame(self.frame, bg=Colors.BACKGROUND)
@@ -28,33 +46,71 @@ class IncidentHistoryPage:
         tree_frame.pack(fill=tk.BOTH, expand=True)
         
         # Create columns
-        columns = ('Date', 'Time', 'Location', 'Type', 'Severity')
-        tree = ttk.Treeview(tree_frame, columns=columns, height=10)
+        columns = ('Date', 'Time', 'Lane', 'Type', 'Severity', 'Description')
+        self.tree = ttk.Treeview(tree_frame, columns=columns, height=10)
         
         # Configure column headings
-        tree.heading('#0', text='ID')
-        tree.column('#0', width=50)
+        self.tree.heading('#0', text='ID')
+        self.tree.column('#0', width=0, stretch=tk.NO) # Hide ID column
         
-        for col in columns:
-            tree.heading(col, text=col)
-            tree.column(col, width=150)
+        headings = {
+            'Date': 100,
+            'Time': 80,
+            'Lane': 80,
+            'Type': 100,
+            'Severity': 100,
+            'Description': 250
+        }
         
-        # Sample data
-        incidents = [
-            ('1', '2026-01-16', '09:30', 'Main Intersection', 'Accident', 'High'),
-            ('2', '2026-01-16', '08:45', 'North Gate', 'Congestion', 'Medium'),
-            ('3', '2026-01-15', '17:20', 'South Junction', 'Traffic Jam', 'Medium'),
-        ]
+        for col, width in headings.items():
+            self.tree.heading(col, text=col)
+            self.tree.column(col, width=width)
         
-        for i, (incident_id, date, time, location, incident_type, severity) in enumerate(incidents):
-            tree.insert('', tk.END, text=incident_id, values=(date, time, location, incident_type, severity))
-        
-        tree.pack(fill=tk.BOTH, expand=True)
+        self.tree.pack(fill=tk.BOTH, expand=True)
         
         # Scrollbar
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.configure(yscrollcommand=scrollbar.set)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        
+    def load_data(self):
+        """Load data from controller"""
+        if not self.controller:
+            return
+            
+        # Clear existing
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+            
+        # Fetch incidents
+        incidents = self.controller.get_incidents()
+        
+        if not incidents:
+            return
+            
+        for inc in incidents:
+            # Parse timestamp "2026-01-29T20:22:46.123456"
+            # Parse timestamp potentially from multiple field names
+            try:
+                dt_str = inc.get('created_at') or inc.get('timestamp', '')
+                if 'T' in dt_str:
+                    date_part, time_part = dt_str.split('T')
+                    time_part = time_part.split('.')[0] # Remove microseconds
+                else:
+                    date_part = dt_str
+                    time_part = ""
+            except:
+                date_part = "Unknown"
+                time_part = "Unknown"
+            
+            self.tree.insert('', tk.END, values=(
+                date_part,
+                time_part,
+                f"Lane {inc.get('lane', '?')}",
+                "Accident", # Type is implicitly accident here
+                inc.get('severity', 'Moderate'),
+                inc.get('description', '')
+            ))
     
     def get_widget(self):
         return self.frame

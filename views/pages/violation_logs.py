@@ -87,8 +87,10 @@ class ViolationLogsPage:
         
         for log in logs:
             # Parse timestamp safely
+            # Parse timestamp safely
             try:
-                dt_obj = datetime.fromisoformat(log.get('timestamp', '').replace('Z', '+00:00'))
+                date_str_raw = log.get('created_at') or log.get('timestamp', '')
+                dt_obj = datetime.fromisoformat(date_str_raw.replace('Z', '+00:00'))
                 date_str = dt_obj.strftime('%Y-%m-%d')
                 time_str = dt_obj.strftime('%H:%M:%S')
             except:

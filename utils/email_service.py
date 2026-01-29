@@ -8,6 +8,10 @@ import string
 from datetime import datetime, timedelta
 import logging
 import threading
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -38,87 +42,86 @@ class EmailService:
         }
         
         # Check if using default credentials or missing credentials
+        email_sent = False
+        
         if self.sender_password == "your_app_password" or not self.sender_password:
             print(f"\n[DEV MODE] Email not configured. Verification code: {code}\n")
             logger.warning(f"Email not configured. Verification code for {recipient_email}: {code}")
-            return True, code
+            # In dev mode, we consider it "handled" but email_sent is False
+            return True, code, False
         
-        # Send email in background thread to avoid UI lag
-        def send_email_async():
-            try:
-                # Create message
-                message = MIMEMultipart("alternative")
-                message["Subject"] = "OptiFlow - Email Verification"
-                message["From"] = self.sender_email
-                message["To"] = recipient_email
-                
-                # Plain text version
-                text = f"""
-                Hello {username},
-                
-                Welcome to OptiFlow Traffic Management System!
-                
-                Your email verification code is: {code}
-                
-                This code will expire in 10 minutes.
-                
-                If you did not create an account, please ignore this email.
-                
-                Best regards,
-                OptiFlow Team
-                """
-                
-                # HTML version
-                html = f"""
-                <html>
-                  <body style="font-family: Arial, sans-serif; background-color: #f5f5f5; padding: 20px;">
-                    <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-                      <h2 style="color: #1a3a52; text-align: center;">🛡️ OptiFlow - Email Verification</h2>
-                      
-                      <p style="color: #333; font-size: 16px;">Hello <strong>{username}</strong>,</p>
-                      
-                      <p style="color: #333; font-size: 16px;">Welcome to OptiFlow Traffic Management System!</p>
-                      
-                      <div style="background-color: #f0f0f0; padding: 20px; border-radius: 5px; text-align: center; margin: 20px 0;">
-                        <p style="color: #666; font-size: 14px; margin: 0;">Your verification code is:</p>
-                        <h1 style="color: #1a3a52; letter-spacing: 5px; margin: 10px 0;">{code}</h1>
-                      </div>
-                      
-                      <p style="color: #666; font-size: 14px;">This code will expire in <strong>10 minutes</strong>.</p>
-                      
-                      <p style="color: #666; font-size: 14px;">If you did not create an account, please ignore this email.</p>
-                      
-                      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
-                      
-                      <p style="color: #999; font-size: 12px; text-align: center;">© 2026 OptiFlow. All rights reserved.</p>
-                    </div>
-                  </body>
-                </html>
-                """
-                
-                part1 = MIMEText(text, "plain")
-                part2 = MIMEText(html, "html")
-                message.attach(part1)
-                message.attach(part2)
-                
-                # Send email
-                with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                    server.starttls()
-                    server.login(self.sender_email, self.sender_password)
-                    server.sendmail(self.sender_email, recipient_email, message.as_string())
-                
-                logger.info(f"Verification email sent to {recipient_email}")
-                
-            except Exception as e:
-                logger.error(f"Error sending email to {recipient_email}: {e}")
-                print(f"\n[FALLBACK] Failed to send email. Verification code: {code}\n")
+        try:
+            # Create message
+            message = MIMEMultipart("alternative")
+            message["Subject"] = "OptiFlow - Email Verification"
+            message["From"] = self.sender_email
+            message["To"] = recipient_email
+            
+            # Plain text version
+            text = f"""
+            Hello {username},
+            
+            Welcome to OptiFlow Traffic Management System!
+            
+            Your verification code is: {code}
+            
+            This code will expire in 10 minutes.
+            
+            If you did not create an account, please ignore this email.
+            
+            Best regards,
+            OptiFlow Team
+            """
+            
+            # HTML version - Dark Theme
+            html = f"""
+            <html>
+              <body style="font-family: 'Segoe UI', Arial, sans-serif; background-color: #0f172a; padding: 20px; color: #f8fafc;">
+                <div style="max-width: 600px; margin: 0 auto; background-color: #1e293b; padding: 40px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); border: 1px solid #334155;">
+                  <h2 style="color: #3b82f6; text-align: center; margin-top: 0; font-size: 24px;">🛡️ OptiFlow</h2>
+                  <h3 style="color: #f8fafc; text-align: center; margin-bottom: 30px; font-weight: 500;">Email Verification</h3>
+                  
+                  <p style="color: #e2e8f0; font-size: 16px; line-height: 1.6;">Hello <strong>{username}</strong>,</p>
+                  
+                  <p style="color: #cbd5e1; font-size: 16px; line-height: 1.6;">Welcome to OptiFlow Traffic Management System! To complete your registration, please verify your email address.</p>
+                  
+                  <div style="background-color: #0f172a; padding: 25px; border-radius: 12px; text-align: center; margin: 30px 0; border: 1px solid #3b82f6;">
+                    <p style="color: #94a3b8; font-size: 13px; margin: 0 0 10px 0; text-transform: uppercase; letter-spacing: 1px;">Verification Code</p>
+                    <h1 style="color: #3b82f6; letter-spacing: 8px; margin: 0; font-size: 36px; font-weight: bold;">{code}</h1>
+                  </div>
+                  
+                  <p style="color: #94a3b8; font-size: 14px; text-align: center;">This code will expire in <strong>10 minutes</strong>.</p>
+                  
+                  <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #334155; text-align: center;">
+                    <p style="color: #64748b; font-size: 12px; margin: 0;">If you did not create an account, you can safely ignore this email.</p>
+                    <p style="color: #64748b; font-size: 12px; margin-top: 8px;">© 2026 OptiFlow. All rights reserved.</p>
+                  </div>
+                </div>
+              </body>
+            </html>
+            """
+            
+            part1 = MIMEText(text, "plain")
+            part2 = MIMEText(html, "html")
+            message.attach(part1)
+            message.attach(part2)
+            
+            # Send email
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                server.starttls()
+                server.login(self.sender_email, self.sender_password)
+                server.sendmail(self.sender_email, recipient_email, message.as_string())
+            
+            logger.info(f"Verification email sent to {recipient_email}")
+            email_sent = True
+            
+        except Exception as e:
+            logger.error(f"Error sending email to {recipient_email}: {e}")
+            print(f"\n[FALLBACK] Failed to send email. Verification code: {code}\n")
+            # Email failed, but we still generated a valid code
+            email_sent = False
         
-        # Start email sending in background thread
-        email_thread = threading.Thread(target=send_email_async, daemon=True)
-        email_thread.start()
-        
-        # Return immediately with code (for dev mode display)
-        return True, code
+        return True, code, email_sent
 
     def verify_code(self, email, code):
         """Verify the provided code"""
@@ -158,87 +161,84 @@ class EmailService:
         }
         
         # Check if using default credentials or missing credentials
+        email_sent = False
         if self.sender_password == "your_app_password" or not self.sender_password:
             print(f"\n[DEV MODE] Email not configured. Password reset code: {code}\n")
             logger.warning(f"Email not configured. Reset code for {recipient_email}: {code}")
-            return True, code
+            return True, code, False
         
-        # Send email in background thread to avoid UI lag
-        def send_email_async():
-            try:
-                # Create message
-                message = MIMEMultipart("alternative")
-                message["Subject"] = "OptiFlow - Password Reset Request"
-                message["From"] = self.sender_email
-                message["To"] = recipient_email
-                
-                # Plain text version
-                text = f"""
-                Hello {username},
-                
-                We received a request to reset your password for your OptiFlow account.
-                
-                Your password reset code is: {code}
-                
-                This code will expire in 15 minutes.
-                
-                If you did not request a password reset, please ignore this email.
-                
-                Best regards,
-                OptiFlow Team
-                """
-                
-                # HTML version
-                html = f"""
-                <html>
-                  <body style="font-family: Arial, sans-serif; background-color: #f5f5f5; padding: 20px;">
-                    <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-                      <h2 style="color: #1a3a52; text-align: center;">🛡️ OptiFlow - Password Reset</h2>
-                      
-                      <p style="color: #333; font-size: 16px;">Hello <strong>{username}</strong>,</p>
-                      
-                      <p style="color: #333; font-size: 16px;">We received a request to reset your password for your OptiFlow account.</p>
-                      
-                      <div style="background-color: #f0f0f0; padding: 20px; border-radius: 5px; text-align: center; margin: 20px 0;">
-                        <p style="color: #666; font-size: 14px; margin: 0;">Your password reset code is:</p>
-                        <h1 style="color: #1a3a52; letter-spacing: 5px; margin: 10px 0;">{code}</h1>
-                      </div>
-                      
-                      <p style="color: #666; font-size: 14px;">This code will expire in <strong>15 minutes</strong>.</p>
-                      
-                      <p style="color: #666; font-size: 14px;">If you did not request a password reset, please ignore this email or <a href="#" style="color: #1a3a52; text-decoration: none;">contact support</a>.</p>
-                      
-                      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
-                      
-                      <p style="color: #999; font-size: 12px; text-align: center;">© 2026 OptiFlow. All rights reserved.</p>
-                    </div>
-                  </body>
-                </html>
-                """
-                
-                part1 = MIMEText(text, "plain")
-                part2 = MIMEText(html, "html")
-                message.attach(part1)
-                message.attach(part2)
-                
-                # Send email
-                with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                    server.starttls()
-                    server.login(self.sender_email, self.sender_password)
-                    server.sendmail(self.sender_email, recipient_email, message.as_string())
-                
-                logger.info(f"Password reset email sent to {recipient_email}")
-                
-            except Exception as e:
-                logger.error(f"Error sending password reset email to {recipient_email}: {e}")
-                print(f"\n[FALLBACK] Failed to send email. Password reset code: {code}\n")
+        try:
+            # Create message
+            message = MIMEMultipart("alternative")
+            message["Subject"] = "OptiFlow - Password Reset Request"
+            message["From"] = self.sender_email
+            message["To"] = recipient_email
+            
+            # Plain text version
+            text = f"""
+            Hello {username},
+            
+            We received a request to reset your password for your OptiFlow account.
+            
+            Your password reset code is: {code}
+            
+            This code will expire in 15 minutes.
+            
+            If you did not request a password reset, please ignore this email.
+            
+            Best regards,
+            OptiFlow Team
+            """
+            
+            # HTML version - Dark Theme
+            html = f"""
+            <html>
+              <body style="font-family: 'Segoe UI', Arial, sans-serif; background-color: #0f172a; padding: 20px; color: #f8fafc;">
+                <div style="max-width: 600px; margin: 0 auto; background-color: #1e293b; padding: 40px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5); border: 1px solid #334155;">
+                  <h2 style="color: #3b82f6; text-align: center; margin-top: 0; font-size: 24px;">🛡️ OptiFlow</h2>
+                  <h3 style="color: #f8fafc; text-align: center; margin-bottom: 30px; font-weight: 500;">Password Reset Request</h3>
+                  
+                  <p style="color: #e2e8f0; font-size: 16px; line-height: 1.6;">Hello <strong>{username}</strong>,</p>
+                  
+                  <p style="color: #cbd5e1; font-size: 16px; line-height: 1.6;">We received a request to reset your password for your OptiFlow account.</p>
+                  
+                  <div style="background-color: #0f172a; padding: 25px; border-radius: 12px; text-align: center; margin: 30px 0; border: 1px solid #ef4444;">
+                    <p style="color: #94a3b8; font-size: 13px; margin: 0 0 10px 0; text-transform: uppercase; letter-spacing: 1px;">Password Reset Code</p>
+                    <h1 style="color: #ef4444; letter-spacing: 8px; margin: 0; font-size: 36px; font-weight: bold;">{code}</h1>
+                  </div>
+                  
+                  <p style="color: #94a3b8; font-size: 14px; text-align: center;">This code will expire in <strong>15 minutes</strong>.</p>
+                  
+                  <p style="color: #cbd5e1; font-size: 14px; text-align: center; margin-top: 20px;">If you did not request a password reset, please ignore this email or contact support.</p>
+                  
+                  <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #334155; text-align: center;">
+                    <p style="color: #64748b; font-size: 12px; margin: 0;">© 2026 OptiFlow. All rights reserved.</p>
+                  </div>
+                </div>
+              </body>
+            </html>
+            """
+            
+            part1 = MIMEText(text, "plain")
+            part2 = MIMEText(html, "html")
+            message.attach(part1)
+            message.attach(part2)
+            
+            # Send email
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                server.starttls()
+                server.login(self.sender_email, self.sender_password)
+                server.sendmail(self.sender_email, recipient_email, message.as_string())
+            
+            logger.info(f"Password reset email sent to {recipient_email}")
+            email_sent = True
+            
+        except Exception as e:
+            logger.error(f"Error sending password reset email to {recipient_email}: {e}")
+            print(f"\n[FALLBACK] Failed to send email. Password reset code: {code}\n")
+            email_sent = False
         
-        # Start email sending in background thread
-        email_thread = threading.Thread(target=send_email_async, daemon=True)
-        email_thread.start()
-        
-        # Return immediately with code (for dev mode display)
-        return True, code
+        return True, code, email_sent
     
     def verify_reset_code(self, email, code):
         """Verify password reset code"""

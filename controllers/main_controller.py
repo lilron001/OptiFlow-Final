@@ -19,13 +19,14 @@ from views.components.notification import NotificationManager
 class MainController:
     """Main application controller with 4-way camera and AI integration"""
     
-    def __init__(self, root, view, db=None, current_user=None, auth_controller=None, on_logout_callback=None, violation_controller=None):
+    def __init__(self, root, view, db=None, current_user=None, auth_controller=None, on_logout_callback=None, violation_controller=None, accident_controller=None):
         self.root = root
         self.view = view
         self.db = db
         self.current_user = current_user
         self.auth_controller = auth_controller
         self.violation_controller = violation_controller
+        self.accident_controller = accident_controller
         self.on_logout_callback = on_logout_callback
         
         # Initialize Notification System
@@ -90,8 +91,7 @@ class MainController:
             self.pages['dashboard'] = DashboardPage(self.view.content_area)
             self.pages['issue_reports'] = IssueReportsPage(self.view.content_area, self.db, self.current_user)
             self.pages['traffic_reports'] = TrafficReportsPage(self.view.content_area)
-            self.pages['incident_history'] = IncidentHistoryPage(self.view.content_area)
-            self.pages['incident_history'] = IncidentHistoryPage(self.view.content_area)
+            self.pages['incident_history'] = IncidentHistoryPage(self.view.content_area, self.accident_controller)
             self.pages['violation_logs'] = ViolationLogsPage(self.view.content_area, self.violation_controller)
             self.pages['analytics'] = AnalyticsPage(self.view.content_area)
             self.pages['settings'] = SettingsPage(self.view.content_area)
@@ -142,7 +142,6 @@ class MainController:
         cycle_state = {
             'current_lane': 0,  # 0=north, 1=south, 2=east, 3=west
             'phase': 'green',   # green, yellow, all_red
-            'phase_start': time.time(),
             'phase_start': time.time(),
             'phase_duration': 15,  # Start with 15s green (observation period)
             'green_check_done': False, # Flag for observation check
@@ -234,10 +233,20 @@ class MainController:
                                         'box': [cx-20, cy-20, cx+40, cy+40],
                                         'center': (cx+10, cy+10)
                                     })
+                                    
+                                    # Save Simulate Accident
+                                    current_time = time.time()
+                                    last_acc = getattr(self, 'last_accident_log', 0)
+                                    if hasattr(self, 'accident_controller') and self.accident_controller:
+                                         if current_time - last_acc > 10.0:
+                                            self.accident_controller.report_accident(lane=lane_id, severity="High", description="Simulated Multi-Vehicle Crash")
+                                            self.last_accident_log = current_time
+                                            self.logger.info(f"Simulated Accident recorded for {direction}")
+                                            # Notify
+                                            self.root.after(0, lambda: self.notification_manager.show("Crash Detected", f"Accident simulated on Lane {lane_id}", "error"))
+
                                     cv2.putText(frame, "⚠️ ACCIDENT DETECTED!", (150, 100), 
                                               cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                                    # Notify
-                                    self.root.after(0, lambda: self.notification_manager.show("Crash Detected", f"Accident simulated on Lane {lane_id}", "error"))
                                 
                                 # 2. Simulate VIOLATION (If Light is RED)
                                 # We simulate a car moving fast through the frame
@@ -367,12 +376,14 @@ class MainController:
                                                     c2 = d2['center']
                                                     cv2.line(annotated_frame, c1, c2, (0, 0, 255), 3)
                                                     
-                                                    # Notify (Throttled)
+                                                    # Notify and Save (Throttled)
                                                     current_time = time.time()
                                                     last_acc = getattr(self, 'last_accident_log', 0)
-                                                    if current_time - last_acc > 10.0:
-                                                        self.last_accident_log = current_time
-                                                        self.root.after(0, lambda: self.notification_manager.show("Accident Alert", f"Collision detected on Lane {lane_id}", "error"))
+                                                    if hasattr(self, 'accident_controller') and self.accident_controller:
+                                                        if current_time - last_acc > 10.0:
+                                                            self.accident_controller.report_accident(lane=lane_id, severity="Severe", description=f"Collision detected ({iou:.2f} IoU)")
+                                                            self.last_accident_log = current_time
+                                                            self.root.after(0, lambda: self.notification_manager.show("Accident Alert", f"Collision detected on Lane {lane_id}", "error"))
                             # -------------------------------------------------------------
                         
                     # Apply final filters (Dark Mode)
