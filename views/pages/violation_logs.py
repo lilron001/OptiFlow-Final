@@ -2,22 +2,39 @@
 import tkinter as tk
 from tkinter import ttk
 from ..styles import Colors, Fonts
+from datetime import datetime
 
 class ViolationLogsPage:
     """Violation logs page with traffic violations database"""
     
-    def __init__(self, parent):
+    def __init__(self, parent, controller=None):
         self.parent = parent
+        self.controller = controller
         self.frame = tk.Frame(parent, bg=Colors.BACKGROUND)
+        self.tree = None
         self.create_widgets()
+        
+        # Load data immediately
+        self.refresh_data()
     
     def create_widgets(self):
         """Create violation logs page layout"""
+        # Header Frame
+        header_frame = tk.Frame(self.frame, bg=Colors.BACKGROUND)
+        header_frame.pack(fill=tk.X, padx=20, pady=15)
+        
         # Title
-        title = tk.Label(self.frame, text="Violation Logs",
+        title = tk.Label(header_frame, text="Violation Logs",
                         font=Fonts.TITLE, bg=Colors.BACKGROUND,
                         fg=Colors.PRIMARY)
-        title.pack(pady=15)
+        title.pack(side=tk.LEFT)
+        
+        # Refresh Button
+        refresh_btn = tk.Button(header_frame, text="🔄 Refresh",
+                               font=Fonts.BODY, bg=Colors.PRIMARY, fg=Colors.WHITE,
+                               relief=tk.FLAT, padx=15, pady=5, cursor="hand2",
+                               command=self.refresh_data)
+        refresh_btn.pack(side=tk.RIGHT)
         
         # Main content
         content_frame = tk.Frame(self.frame, bg=Colors.BACKGROUND)
@@ -28,34 +45,69 @@ class ViolationLogsPage:
         tree_frame.pack(fill=tk.BOTH, expand=True)
         
         # Create columns
-        columns = ('Date', 'Time', 'Vehicle', 'Violation Type', 'Status')
-        tree = ttk.Treeview(tree_frame, columns=columns, height=10)
+        columns = ('Date', 'Time', 'Lane', 'Violation Type', 'Vehicle ID', 'Status')
+        self.tree = ttk.Treeview(tree_frame, columns=columns, height=15, show='headings')
         
         # Configure column headings
-        tree.heading('#0', text='ID')
-        tree.column('#0', width=50)
-        
         for col in columns:
-            tree.heading(col, text=col)
-            tree.column(col, width=140)
+            self.tree.heading(col, text=col)
+            self.tree.column(col, width=120)
         
-        # Sample data
-        violations = [
-            ('1', '2026-01-16', '10:15', 'ABC-123', 'Red Light', 'Recorded'),
-            ('2', '2026-01-16', '09:45', 'XYZ-789', 'Speeding', 'Recorded'),
-            ('3', '2026-01-15', '16:30', 'DEF-456', 'No Parking', 'Recorded'),
-            ('4', '2026-01-15', '15:20', 'GHI-012', 'Wrong Lane', 'Pending'),
-        ]
-        
-        for i, (vid, date, time, vehicle, violation_type, status) in enumerate(violations):
-            tree.insert('', tk.END, text=vid, values=(date, time, vehicle, violation_type, status))
-        
-        tree.pack(fill=tk.BOTH, expand=True)
+        self.tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         
         # Scrollbar
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.configure(yscrollcommand=scrollbar.set)
-    
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        
+        # Style treeview
+        style = ttk.Style()
+        style.configure("Treeview", 
+                       background=Colors.CARD_BG,
+                       foreground=Colors.TEXT, 
+                       fieldbackground=Colors.CARD_BG,
+                       font=Fonts.BODY,
+                       rowheight=30)
+        style.configure("Treeview.Heading",
+                       background=Colors.SECONDARY,
+                       foreground="black",
+                       font=Fonts.BODY_BOLD)
+        style.map('Treeview', background=[('selected', Colors.PRIMARY)])
+
+    def refresh_data(self):
+        """Fetch and display logs from controller"""
+        # Clear existing items
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+            
+        if not self.controller:
+            return
+            
+        logs = self.controller.get_logs()
+        
+        for log in logs:
+            # Parse timestamp safely
+            try:
+                dt_obj = datetime.fromisoformat(log.get('timestamp', '').replace('Z', '+00:00'))
+                date_str = dt_obj.strftime('%Y-%m-%d')
+                time_str = dt_obj.strftime('%H:%M:%S')
+            except:
+                date_str = "Unknown"
+                time_str = "Unknown"
+                
+                
+            # Map lane ID to Direction Name
+            lane_id = log.get('lane', '?')
+            lane_map = {0: 'North', 1: 'South', 2: 'East', 3: 'West', '0': 'North', '1': 'South', '2': 'East', '3': 'West'}
+            lane = lane_map.get(lane_id, f"Lane {lane_id}")
+            
+            v_type = log.get('violation_type', 'Unknown')
+            veh_id = log.get('vehicle_id', 'N/A')
+            status = "Recorded" # Default status
+            
+            self.tree.insert('', tk.END, values=(date_str, time_str, lane, v_type, veh_id, status))
+            
     def get_widget(self):
+        # Refresh when shown
+        self.refresh_data()
         return self.frame

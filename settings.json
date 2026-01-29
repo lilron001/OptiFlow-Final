@@ -1,0 +1,22 @@
+{
+    "camera": {
+        "enable_camera": true,
+        "auto_focus": true,
+        "record_video": false
+    },
+    "detection": {
+        "enable_detection": true,
+        "show_boxes": true,
+        "real_time_alerts": true
+    },
+    "database": {
+        "enable_database": true,
+        "auto_backup": false,
+        "compress_data": false
+    },
+    "alerts": {
+        "email_alerts": true,
+        "sms_alerts": false,
+        "push_notifications": true
+    }
+}

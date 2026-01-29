@@ -11,7 +11,6 @@ CREATE TABLE IF NOT EXISTS public.users (
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     role TEXT DEFAULT 'operator', -- 'admin' or 'operator'
-    is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_login TIMESTAMPTZ
 );

@@ -44,3 +44,4 @@ Desktop.ini
 
 # Logs
 *.log
+violation_logs_local.json
