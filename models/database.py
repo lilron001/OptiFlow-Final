@@ -6,9 +6,18 @@ from dotenv import load_dotenv
 import logging
 try:
     from supabase import create_client, Client
-except ImportError:
-    create_client = None
-    Client = None
+except ImportError as e:
+    print(f"WARNING: Could not import supabase: {e}")
+    print("Attempting to install supabase...")
+    import subprocess
+    import sys
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "supabase", "-q"])
+        from supabase import create_client, Client
+    except Exception as install_err:
+        print(f"Failed to auto-install supabase: {install_err}")
+        create_client = None
+        Client = None
 
 from typing import Dict, List, Optional, Any
 

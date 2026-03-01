@@ -154,8 +154,8 @@ class AppManager:
     def handle_signup(self, first_name, last_name, username, email, password):
         """Handle signup - send verification email"""
         if self.auth.register_user(first_name, last_name, username, email, password, role="operator"):
-            # Show email verification page
-            self.show_email_verification_page(email, username)
+            # Schedule verification page to show after message box closes
+            self.root.after(500, lambda: self.show_email_verification_page(email, username))
         # Error message is shown by auth controller
     
     def show_email_verification_page(self, email, username):
