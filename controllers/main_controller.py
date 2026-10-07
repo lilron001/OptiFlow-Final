@@ -161,7 +161,14 @@ class MainController:
 
         # Threading
         self.camera_thread = None
+        self._det_thread = None
         self.is_running = True
+
+        # Hand-off from background threads to the Tk main thread.
+        # Only the NEWEST frame per lane is kept, so the UI can never fall behind.
+        self._ui_lock = threading.Lock()
+        self._latest_ui = {}
+        self._latest_report = None
         
         # Track read issue reports
         self.last_viewed_report_count = 0
@@ -202,20 +209,17 @@ class MainController:
             
             base_name = name_map.get(direction, direction.title())
             
-            if current_source.startswith("Camera") and manager and manager.is_running:
+            if manager and manager.is_running and current_source != "Simulated":
                 status = "active"
-                # Make it dynamic: show hardware/source name
-                display_name = f"{base_name} ({current_source.replace('Camera', 'Cam')})"
-            elif current_source != "Simulated" and manager and manager.is_running:
-                status = "active"
-                # If it's a video file, clip the name or just show 'Video'
-                if len(current_source) > 10:
-                    src_short = current_source[:7] + "..."
+                if current_source.startswith("Camera"):
+                    display_name = f"{base_name} ({current_source.replace('Camera', 'Cam')})"
+                elif current_source.lower().startswith(("http", "rtsp", "rtmp")):
+                    display_name = f"{base_name} (Stream)"
                 else:
-                    src_short = current_source
-                display_name = f"{base_name} ({src_short})"
+                    src_short = current_source if len(current_source) <= 10 else current_source[:7] + "..."
+                    display_name = f"{base_name} ({src_short})"
             else:
-                status = "simulated" 
+                status = "simulated"
                 display_name = f"{base_name} (Sim)"
 
             cameras_data.append({
@@ -257,24 +261,109 @@ class MainController:
                 self.current_page = page
         except Exception as e:
             print(f"Navigation error: {e}")
+        # ------------------------------------------------------------------
+    # Camera source helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_source(source):
+        """'Camera 3' -> 3 | 'https://…/stream.m3u8' -> that URL | otherwise None"""
+        s = str(source).strip()
+        if s.lower().startswith("camera"):
+            try:
+                return int(s.split()[1])
+            except (IndexError, ValueError):
+                return None
+        if s.lower().startswith(("http://", "https://", "rtsp://", "rtmp://")):
+            return s
+        return None
+
+    def _open_source(self, direction, source):
+        parsed = self._parse_source(source)
+        if parsed is None:
+            return False
+        return self.camera_managers[direction].initialize_camera(parsed)
+
+    # ------------------------------------------------------------------
+    # YOLO worker: runs inference in its own thread, round-robin over lanes
+    # ------------------------------------------------------------------
+    def _detection_worker(self):
+        from utils.app_config import SETTINGS
+        while self.is_running:
+            worked = False
+            for direction in self.directions:
+                if not self.is_running:
+                    break
+                try:
+                    if not SETTINGS.get("enable_detection", True):
+                        break
+                    source = SETTINGS.get(f"camera_source_{direction}", "Simulated")
+                    if source == "Simulated":
+                        continue
+
+                    state = self.states[direction]
+                    throttle = SETTINGS.get("ai_throttle_seconds", 0.125)
+                    if time.time() - state.get('last_ai_time', 0) < throttle:
+                        continue
+
+                    frame = self.camera_managers[direction].get_frame()
+                    if frame is None:
+                        state['cached_detections'] = []
+                        continue
+
+                    result = self.yolo_detector.detect(frame, stream_key=direction, draw=False)
+                    state['cached_detections'] = result.get('detections', [])
+                    state['det_seq'] = state.get('det_seq', 0) + 1
+                    state['last_ai_time'] = time.time()
+                    worked = True
+                except Exception as e:
+                    self.logger.error(f"Detection worker error ({direction}): {e}", exc_info=True)
+            if not worked:
+                time.sleep(0.05)
+
+    # ------------------------------------------------------------------
+    # UI tick: runs on the Tk main thread, draws only the newest frames
+    # ------------------------------------------------------------------
+    def _ui_tick(self):
+        if not self.is_running:
+            return
+        try:
+            with self._ui_lock:
+                frames, self._latest_ui = self._latest_ui, {}
+                report, self._latest_report = self._latest_report, None
+
+            page = self.current_page
+            if page is not None:
+                if hasattr(page, 'update_camera_feed'):
+                    for direction, (frame, data) in frames.items():
+                        page.update_camera_feed(frame, data, direction)
+                if report is not None and hasattr(page, 'update_report'):
+                    page.update_report(report)
+        except Exception as e:
+            self.logger.error(f"UI tick error: {e}", exc_info=True)
+        finally:
+            try:
+                self.root.after(40, self._ui_tick)   # ~25 UI updates per second max
+            except tk.TclError:
+                pass  # window already destroyed
     
     def start_camera_feed(self):
-        """Start camera feeds in background thread"""
+        def start_camera_feed(self):
+            """Start camera capture, the YOLO worker, the processing loop and the UI tick"""
         from utils.app_config import SETTINGS
-        # Initialize all cameras based on SETTINGS
-        for i, direction in enumerate(self.directions):
+        for direction in self.directions:
             source = SETTINGS.get(f"camera_source_{direction}", "Simulated")
             self.states[direction]["current_source"] = source
-            if source.startswith("Camera"):
-                try:
-                    cam_idx = int(source.split(" ")[1])
-                    self.camera_managers[direction].initialize_camera(cam_idx)
-                except ValueError:
-                    pass
-            
+            self._open_source(direction, source)
+
         self.camera_thread = threading.Thread(target=self.camera_loop, daemon=True)
         self.camera_thread.start()
-        
+
+        self._det_thread = threading.Thread(target=self._detection_worker, daemon=True, name="yolo-worker")
+        self._det_thread.start()
+
+        # Must be started from the main thread
+        self.root.after(40, self._ui_tick)
+
         self.logger.info("Camera feed started with DQN traffic control")
     
     def camera_loop(self):
@@ -354,17 +443,13 @@ class MainController:
                     # Check if source changed
                     if camera_source != state.get("current_source", "Simulated"):
                         self.camera_managers[direction].release()
-                        if camera_source.startswith("Camera"):
-                            try:
-                                cam_idx = int(camera_source.split(" ")[1])
-                                self.camera_managers[direction].initialize_camera(cam_idx)
-                            except ValueError:
-                                pass
+                        self._open_source(direction, camera_source)
                         state["current_source"] = camera_source
-                    
-                    # Get Frame
+                        state["cached_detections"] = []
+
+                    # Get Frame (any non-simulated source: local camera, RTSP or URL)
                     frame = None
-                    if camera_source.startswith("Camera"):
+                    if camera_source != "Simulated":
                         frame = self.camera_managers[direction].get_frame()
                     
                     if frame is None:
@@ -571,43 +656,15 @@ class MainController:
                         annotated_frame = frame
                         
                         if enable_detection:
-                            # ---------------------------
-                            # PERFORMANCE OPTIMIZATION
-                            # Throttle AI to ~10 FPS (every 0.1s)
-                            # ---------------------------
-                            current_ai_time = time.time()
-                            last_ai_time = state.get('last_ai_time', 0)
-                            
-                            # Determine if we should run fresh detection
-                            # Throttle YOLO inference - gives the UI display loop
-                            # more time per cycle so video rendering stays smooth
-                            throttle_val = SETTINGS.get("ai_throttle_seconds", 0.125)
-                            should_detect = (current_ai_time - last_ai_time) > throttle_val
-                            
-                            if should_detect:
-                                # Run YOLO detection
-                                detection_result = self.yolo_detector.detect(frame)
-                                detections = detection_result.get("detections", [])
-                                annotated_frame = detection_result.get('annotated_frame', frame)
-                                
-                                # Update cache
-                                state['last_ai_time'] = current_ai_time
-                                state['cached_detections'] = detections
+                            # YOLO now runs in _detection_worker(); here we only read its latest result.
+                            detections = state.get('cached_detections', [])
+                            det_seq = state.get('det_seq', 0)
+                            fresh_detection = (det_seq != state.get('_seen_det_seq', -1))
+                            state['_seen_det_seq'] = det_seq
+
+                            if show_boxes and detections:
+                                annotated_frame = self.yolo_detector.draw_detections(frame, detections)
                             else:
-                                # Reuse cached detections but redraw on NEW frame to prevent "ghosting"
-                                # This ensures the video background is smooth (30fps) while boxes update at 10fps
-                                detections = state.get('cached_detections', [])
-                                
-                                if show_boxes and detections:
-                                    try:
-                                        annotated_frame = self.yolo_detector.draw_detections(frame, detections)
-                                    except AttributeError:
-                                        # Fallback if method missing (shouldn't happen)
-                                        annotated_frame = frame
-                                else:
-                                    annotated_frame = frame
-                            
-                            if not show_boxes:
                                 annotated_frame = frame
 
                             # -------------------------------------------------------------
@@ -742,14 +799,15 @@ class MainController:
                                     if accident_candidate:
                                         break
 
-                                # Multi-frame counter (Stage 4)
-                                if accident_candidate:
-                                    self._accident_frame_counts[lane_id] = \
-                                        self._accident_frame_counts.get(lane_id, 0) + 1
-                                else:
-                                    self._accident_frame_counts[lane_id] = max(
-                                        0, self._accident_frame_counts.get(lane_id, 0) - 1
-                                    )
+                                # Multi-frame counter (Stage 4): only advance on fresh YOLO results
+                                if fresh_detection:
+                                    if accident_candidate:
+                                        self._accident_frame_counts[lane_id] = \
+                                            self._accident_frame_counts.get(lane_id, 0) + 1
+                                    else:
+                                        self._accident_frame_counts[lane_id] = max(
+                                            0, self._accident_frame_counts.get(lane_id, 0) - 1
+                                        )
 
                                 frame_count = self._accident_frame_counts.get(lane_id, 0)
                                 accident_detected = frame_count >= CONFIRM_FRAMES
@@ -861,7 +919,7 @@ class MainController:
 
                     # Log vehicle detections (only if count > 0 to avoid spam)
                     if len(detections) > 0:
-                        self.logger.info(f"📹 {direction.upper()}: Detected {len(detections)} vehicles")
+                        self.logger.debug(f"{direction.upper()}: {len(detections)} vehicles")
                     
                     # Push full typed detections into the new TrafficLightController
                     # This enables congestion weighting, emergency detection, and starvation tracking.
@@ -887,26 +945,18 @@ class MainController:
                     # )
 
                     # Cache the latest frame per lane for violation screenshot capture
-                    self._lane_frames[lane_id] = (
-                        annotated_frame.copy() if annotated_frame is not None else None
-                    )
+                    self._lane_frames[lane_id] = annotated_frame
                     
-                    # Update dashboard display safely on main thread
+                                        # Hand the newest frame to the UI thread (older, unshown frames are dropped)
                     if self.current_page and hasattr(self.current_page, 'update_camera_feed'):
                         dash_data = {
                             'vehicle_count': state['vehicle_count'],
                             'signal_state': state['signal_state'],
                             'time_remaining': max(0, state['time_remaining'])
                         }
+                        with self._ui_lock:
+                            self._latest_ui[direction] = (annotated_frame, dash_data)
                         
-                        # Create a copy of the frame to avoid race conditions
-                        frame_copy = annotated_frame.copy() if annotated_frame is not None else None
-                        
-                        # Schedule UI update on main thread
-                        self.root.after(0, lambda f=frame_copy, d=dash_data, dir=direction: 
-                            self.current_page.update_camera_feed(f, d, dir) 
-                            if self.current_page and hasattr(self.current_page, 'update_camera_feed') else None
-                        )
                         
                 except Exception as e:
                     self.logger.error(f"Error processing camera ({direction}): {e}", exc_info=True)
@@ -922,10 +972,8 @@ class MainController:
                     'violations': self.session_violations
                 }
                 
-                self.root.after(0, lambda d=report_data: 
-                    self.current_page.update_report(d) 
-                    if self.current_page and hasattr(self.current_page, 'update_report') else None
-                )
+                with self._ui_lock:
+                    self._latest_report = report_data
 
             # ─────────────────────────────────────────────────────────────────
             # Step 2: DQN Traffic Light State Machine
@@ -1076,8 +1124,8 @@ class MainController:
             except Exception as e:
                 self.logger.error(f"Error in DQN traffic light control: {e}", exc_info=True)
             
-            # Small delay — 10 FPS UI update rate; controller observes at 1-sec cadence
-            time.sleep(0.1)
+            # ~25 loops/sec; YOLO runs in its own thread so this loop never waits on it
+            time.sleep(0.04)
     
     def _check_blocking_intersection(self, direction: str, lane_id: int,
                                      detections: list, frame, current_time: float,
@@ -1371,4 +1419,3 @@ class MainController:
         self.stop_camera()
         if self.on_logout_callback:
             self.on_logout_callback()
-
