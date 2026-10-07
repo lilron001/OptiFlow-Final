@@ -105,9 +105,14 @@ class IssueReportsPage:
         self.tree.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
         
+        # Priority row colors
+        self.tree.tag_configure('priority_low',    background='#0D2B20', foreground='#10B981')
+        self.tree.tag_configure('priority_medium', background='#2B2207', foreground='#F59E0B')
+        self.tree.tag_configure('priority_high',   background='#2B0D0D', foreground='#EF4444')
+
         # Bind double click
         self.tree.bind("<Double-1>", self.on_item_double_click)
-        
+
         # Initial Load
         self.load_reports()
         
@@ -126,14 +131,16 @@ class IssueReportsPage:
                 except:
                     date_str = report.get('created_at', '')
                     
+                priority_tag = {'Low': 'priority_low', 'Medium': 'priority_medium', 'High': 'priority_high'}.get(
+                    report.get('priority', 'Medium'), 'priority_medium')
                 self.tree.insert("", tk.END, values=(
                     report.get('report_id'),
                     date_str,
-                    f" {report.get('title')}", # Padding
+                    f" {report.get('title')}",
                     report.get('priority', 'Medium').upper(),
                     report.get('status', 'Open').upper(),
                     report.get('author_name', 'Unknown')
-                ))
+                ), tags=(priority_tag,))
     
     def show_create_report_dialog(self):
         """Show modern CTk dialog to create new report"""
@@ -451,13 +458,16 @@ class IssueReportsPage:
                           font=('Segoe UI', 11, 'bold'), fg_color='#1E293B', 
                           hover_color='#334155', text_color=Colors.TEXT,
                           corner_radius=6, width=100, height=30).pack(side=tk.LEFT)
-             dialog.destroy()
+
+        def safely_close():
+            dialog.attributes('-topmost', False)
+            dialog.destroy()
 
         # Close Button
         ctk.CTkButton(inner, text="Close Window", command=safely_close,
                       font=('Segoe UI', 13, 'bold'),
                       fg_color='#1E293B', hover_color='#334155', text_color=Colors.TEXT,
                       corner_radius=8, width=140, height=40).pack(pady=(40, 0))
-    
+
     def get_widget(self):
         return self.frame

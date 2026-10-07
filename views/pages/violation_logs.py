@@ -201,7 +201,7 @@ class ViolationLogsPage:
                 
             # Map lane ID to Direction Name
             lane_id = log.get('lane', '?')
-            lane_map = {0: 'North Lane', 1: 'South Lane', 2: 'East Lane', 3: 'West Lane', '0': 'North Lane', '1': 'South Lane', '2': 'East Lane', '3': 'West Lane'}
+            lane_map = {0: 'North Gate', 1: 'South Junction', 2: 'East Portal', 3: 'West Avenue', '0': 'North Gate', '1': 'South Junction', '2': 'East Portal', '3': 'West Avenue'}
             lane = lane_map.get(lane_id, f"Lane {lane_id}")
             
             v_type = log.get('violation_type', 'Unknown')
@@ -324,7 +324,7 @@ class ViolationLogsPage:
                         y_text = pdf_img.height + margin
                         
                         lane_id = log.get('lane', '?')
-                        lane_map = {0: 'North Lane', 1: 'South Lane', 2: 'East Lane', 3: 'West Lane', '0': 'North Lane', '1': 'South Lane', '2': 'East Lane', '3': 'West Lane'}
+                        lane_map = {0: 'North Gate', 1: 'South Junction', 2: 'East Portal', 3: 'West Avenue', '0': 'North Gate', '1': 'South Junction', '2': 'East Portal', '3': 'West Avenue'}
                         lane_str = lane_map.get(lane_id, f"Lane {lane_id}")
                         v_type = log.get('violation_type', 'Unknown')
                         

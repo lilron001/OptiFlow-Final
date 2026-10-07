@@ -217,7 +217,7 @@ class IncidentHistoryPage:
                 time_part = "Unknown"
             
             lane_id = inc.get('lane', '?')
-            lane_map = {0: 'North Lane', 1: 'South Lane', 2: 'East Lane', 3: 'West Lane', '0': 'North Lane', '1': 'South Lane', '2': 'East Lane', '3': 'West Lane'}
+            lane_map = {0: 'North Gate', 1: 'South Junction', 2: 'East Portal', 3: 'West Avenue', '0': 'North Gate', '1': 'South Junction', '2': 'East Portal', '3': 'West Avenue'}
             lane_name = lane_map.get(lane_id, f"Lane {lane_id}")
 
             image_url = inc.get('image_url')
@@ -307,7 +307,7 @@ class IncidentHistoryPage:
 
         def lane_text():
             lane_id = incident.get('lane', '?')
-            lane_map = {0: 'North Lane', 1: 'South Lane', 2: 'East Lane', 3: 'West Lane', '0': 'North Lane', '1': 'South Lane', '2': 'East Lane', '3': 'West Lane'}
+            lane_map = {0: 'North Gate', 1: 'South Junction', 2: 'East Portal', 3: 'West Avenue', '0': 'North Gate', '1': 'South Junction', '2': 'East Portal', '3': 'West Avenue'}
             return lane_map.get(lane_id, f"Lane {lane_id}")
 
         def download_pdf():

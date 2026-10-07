@@ -41,6 +41,7 @@ class MainController:
         
         # Directions configuration (map to lane IDs)
         self.directions = ['north', 'south', 'east', 'west']
+        self.lane_names = {0: 'North Gate', 1: 'South Junction', 2: 'East Portal', 3: 'West Avenue'}
         self.direction_to_lane = {
             'north': 0,
             'south': 1,
@@ -122,7 +123,42 @@ class MainController:
         # Counts consecutive frames where a collision candidate is detected.
         # Accident is only confirmed after ACCIDENT_CONFIRM_FRAMES consecutive hits.
         self._accident_frame_counts = {i: 0 for i in range(4)}
-        
+
+        # Prohibited stopping tracker
+        self.PROHIBITED_STOP_SECONDS = 300
+        self._prohibited_stop_tracker: dict = {d: {} for d in ['north', 'south', 'east', 'west']}
+
+        # Blocking intersection tracker
+        # Fires when a vehicle is stationary BEYOND the stop line while RED
+        # for >= BLOCKING_INTERSECTION_SECONDS continuously.
+        self.BLOCKING_INTERSECTION_SECONDS = 20
+        # direction -> { grid_key: {"first_seen": float, "logged": bool} }
+        self._blocking_intersection_tracker: dict = {d: {} for d in ['north', 'south', 'east', 'west']}
+
+        # Wrong-way driving detector
+        # Fires after WRONG_WAY_CONFIRM_SECONDS of confirmed counter-flow movement.
+        self.WRONG_WAY_CONFIRM_SECONDS = 3.0
+        self._wrong_way_tracker: dict  = {d: {} for d in ['north', 'south', 'east', 'west']}
+        self._wrong_way_next_id: dict  = {d: 0   for d in ['north', 'south', 'east', 'west']}
+
+        # High congestion notification
+        # Fires when a lane hits 40+ vehicles, re-alerts every 60 s while still congested.
+        self.CONGESTION_VEHICLE_THRESHOLD = 40
+        self.CONGESTION_NOTIFY_INTERVAL   = 60   # seconds between repeat alerts
+        self._congestion_last_notify: dict = {d: 0.0 for d in ['north', 'south', 'east', 'west']}
+
+        # Low traffic performance notification (fires when a lane drops below threshold)
+        self.LOW_TRAFFIC_THRESHOLD      = 5    # fewer than this = low traffic
+        self.LOW_TRAFFIC_NOTIFY_INTERVAL = 120  # seconds between per-lane alerts
+        self._low_traffic_last_notify: dict = {d: 0.0 for d in ['north', 'south', 'east', 'west']}
+
+        # Metrics for green light efficiency and hourly traffic flow
+        self._system_start_time = time.time()
+        self._lane_green_ticks:  dict = {d: 0 for d in ['north', 'south', 'east', 'west']}
+        self._lane_total_ticks:  dict = {d: 0 for d in ['north', 'south', 'east', 'west']}
+        self._lane_throughput:   dict = {d: 0 for d in ['north', 'south', 'east', 'west']}
+        self._lane_prev_count:   dict = {d: 0 for d in ['north', 'south', 'east', 'west']}
+
         # Threading
         self.camera_thread = None
         self.is_running = True
@@ -459,7 +495,7 @@ class MainController:
                                             self.last_accident_log = current_time
                                             self.logger.info(f"Simulated Accident recorded for {direction}")
                                             # Notify
-                                            self.root.after(0, lambda: self.notification_manager.show("Crash Detected", f"Accident simulated on Lane {lane_id}", "error"))
+                                            self.root.after(0, lambda lid=lane_id: self.notification_manager.show("Crash Detected", f"Accident on {self.lane_names.get(lid, f'Lane {lid}')}", "error"))
                                 
                                 # 2. Simulate VIOLATION (If Light is RED)
                                 # We simulate a car running through the stop line
@@ -491,7 +527,7 @@ class MainController:
                                             self.last_violation_log = current_time
                                             self.logger.info(f"Simulated Violation recorded for {direction}")
                                             # Notify
-                                            self.root.after(0, lambda: self.notification_manager.show("Violation Alert", f"Red Light Violation on Lane {lane_id}", "violation"))
+                                            self.root.after(0, lambda lid=lane_id: self.notification_manager.show("Violation Alert", f"Red Light Violation — {self.lane_names.get(lid, f'Lane {lid}')}", "violation"))
 
                                 # 3. Simulate EMERGENCY VEHICLE
                                 # Provide a small chance for an emergency vehicle to show up and trigger priority
@@ -622,7 +658,7 @@ class MainController:
                                                             self.last_violation_log = current_time
                                                             self.logger.info(f"Violation recorded for {direction}")
                                                             # Notify
-                                                            self.root.after(0, lambda: self.notification_manager.show("Violation Alert", f"Red Light Violation on Lane {lane_id}", "violation"))
+                                                            self.root.after(0, lambda lid=lane_id: self.notification_manager.show("Violation Alert", f"Red Light Violation — {self.lane_names.get(lid, f'Lane {lid}')}", "violation"))
                                                     
                                                     break
 
@@ -768,9 +804,9 @@ class MainController:
                                                 frame=annotated_frame
                                             )
                                             self.last_accident_log = current_time
-                                            self.root.after(0, lambda: self.notification_manager.show(
+                                            self.root.after(0, lambda lid=lane_id: self.notification_manager.show(
                                                 "Accident Alert",
-                                                f"Collision confirmed on Lane {lane_id}",
+                                                f"Collision — {self.lane_names.get(lid, f'Lane {lid}')}",
                                                 "error"
                                             ))
                             # -------------------------------------------------------------
@@ -784,7 +820,45 @@ class MainController:
                     state['vehicle_count'] = len([d for d in detections
                                                   if d.get('class_name') not in ['emergency_vehicle']])
                     all_lane_counts.append(state['vehicle_count'])
-                    
+
+                    # High-congestion alert (40+ vehicles)
+                    if state['vehicle_count'] >= self.CONGESTION_VEHICLE_THRESHOLD:
+                        if current_time - self._congestion_last_notify[direction] >= self.CONGESTION_NOTIFY_INTERVAL:
+                            self._congestion_last_notify[direction] = current_time
+                            lane_name = {'north': 'North Gate', 'south': 'South Junction',
+                                         'east': 'East Portal', 'west': 'West Avenue'}.get(direction, direction.title())
+                            vc = state['vehicle_count']
+                            self.root.after(0, lambda n=lane_name, c=vc: self.notification_manager.show(
+                                "High Congestion",
+                                f"{n}: {c} vehicles",
+                                "warning"
+                            ))
+                            self.logger.info(f"[Congestion] {direction.upper()} hit {vc} vehicles")
+                    else:
+                        # Reset timer when congestion clears so next spike notifies immediately
+                        self._congestion_last_notify[direction] = 0.0
+
+                    # Throughput tracking (count vehicles that exit the frame)
+                    prev_c = self._lane_prev_count[direction]
+                    curr_c = state['vehicle_count']
+                    if curr_c < prev_c:
+                        self._lane_throughput[direction] += (prev_c - curr_c)
+                    self._lane_prev_count[direction] = curr_c
+
+                    # Low traffic notification (at most once every 2 minutes per lane)
+                    if state['vehicle_count'] < self.LOW_TRAFFIC_THRESHOLD:
+                        if current_time - self._low_traffic_last_notify[direction] >= self.LOW_TRAFFIC_NOTIFY_INTERVAL:
+                            self._low_traffic_last_notify[direction] = current_time
+                            _ln = {'north': 'North Gate', 'south': 'South Junction',
+                                   'east': 'East Portal', 'west': 'West Avenue'}.get(direction, direction.title())
+                            _vc = state['vehicle_count']
+                            self.root.after(0, lambda n=_ln, c=_vc:
+                                self.notification_manager.show(
+                                    "Low Traffic",
+                                    f"{n}: {c} vehicles",
+                                    "success"
+                                ))
+
                     # Log vehicle detections (only if count > 0 to avoid spam)
                     if len(detections) > 0:
                         self.logger.info(f"📹 {direction.upper()}: Detected {len(detections)} vehicles")
@@ -792,6 +866,25 @@ class MainController:
                     # Push full typed detections into the new TrafficLightController
                     # This enables congestion weighting, emergency detection, and starvation tracking.
                     self.traffic_controller.update_lane_detections(lane_id, detections)
+
+                    # Check for blocking intersection (vehicle beyond stop line while RED)
+                    self._check_blocking_intersection(
+                        direction, lane_id, detections,
+                        annotated_frame, current_time,
+                        state['signal_state']
+                    )
+
+                    # Check for prohibited stopping (vehicle stationary in intersection zone)
+                    self._check_prohibited_stopping(
+                        direction, lane_id, detections,
+                        annotated_frame, current_time
+                    )
+
+                    # Check for wrong-way driving (vehicle moving against lane flow)
+                    # self._check_wrong_way_driving(
+                    #     direction, lane_id, detections,
+                    #     annotated_frame, current_time
+                    # )
 
                     # Cache the latest frame per lane for violation screenshot capture
                     self._lane_frames[lane_id] = (
@@ -903,6 +996,12 @@ class MainController:
                             elif lane_signal in ('GREEN', 'YELLOW'):
                                 self.states[direction]['time_remaining'] = ctrl_remaining
 
+                    # Track green light efficiency ticks (once per full-cycle update)
+                    for _d in self.directions:
+                        self._lane_total_ticks[_d] += 1
+                        if self.states[_d].get('signal_state') == 'GREEN':
+                            self._lane_green_ticks[_d] += 1
+
                     # Log meaningful transitions
                     if decision is not None:
                         phase_name = decision.get('phase', 'unknown')
@@ -941,18 +1040,32 @@ class MainController:
 
                 for direction in self.directions:
                     st  = self.states[direction]
+                    lane_id = self.direction_to_lane[direction]
                     dt_since_last = current_time - self._display_last_tick[direction]
                     self._display_last_tick[direction] = current_time
 
-                    target_time = max(0.0, float(st.get('time_remaining', 0.0)))
-                    signal_state = st.get('signal_state', 'RED')
+                    # Read directly from the controller every 0.1 s so snaps
+                    # happen instantly and the display never freezes at 0
+                    # waiting for the 1-second sync block.
+                    try:
+                        target_time = max(0.0, self.traffic_controller.get_lane_time_remaining(lane_id))
+                        signal_state = self.traffic_controller.get_lane_signal_state(lane_id)
+                    except Exception:
+                        target_time = max(0.0, float(st.get('time_remaining', 0.0)))
+                        signal_state = st.get('signal_state', 'RED')
+
+                    st['signal_state'] = signal_state
+
                     prev_signal = self._display_signal_state.get(direction)
                     prev_disp = self._display_remaining.get(direction, target_time)
                     new_disp = max(0.0, prev_disp - max(0.0, dt_since_last))
 
                     if prev_signal != signal_state:
                         new_disp = target_time
-                    elif target_time < new_disp - 1.5:
+                    elif abs(target_time - new_disp) > 1.5:
+                        # Snap in EITHER direction: down when controller trims
+                        # the green, UP when a RED lane gets a fresh countdown
+                        # (e.g. after emergency resumption jumps from 3s → 35s).
                         new_disp = target_time
 
                     self._display_signal_state[direction] = signal_state
@@ -966,6 +1079,248 @@ class MainController:
             # Small delay — 10 FPS UI update rate; controller observes at 1-sec cadence
             time.sleep(0.1)
     
+    def _check_blocking_intersection(self, direction: str, lane_id: int,
+                                     detections: list, frame, current_time: float,
+                                     signal_state: str):
+        """
+        Track vehicles that are stationary BEYOND the stop line while the
+        signal is RED. If they haven't moved for BLOCKING_INTERSECTION_SECONDS,
+        auto-capture and log a Blocking Intersection violation.
+        """
+        if frame is None or signal_state != 'RED':
+            # Clear tracker when light is no longer red so stale entries don't carry over
+            self._blocking_intersection_tracker[direction].clear()
+            return
+
+        h, w = frame.shape[:2]
+
+        # Same stop-line geometry used for drawing
+        line_y  = int(h * 0.80)
+        line_x1 = int(w * 0.25)
+        line_x2 = int(w * 0.75)
+
+        vehicle_classes = {'car', 'truck', 'bus', 'motorcycle', 'jeepney'}
+        tracker = self._blocking_intersection_tracker[direction]
+
+        # Vehicles whose centre is ABOVE the stop line (passed into intersection)
+        occupied_now: set = set()
+        for det in detections:
+            if det.get('class_name') not in vehicle_classes:
+                continue
+            cx, cy = det.get('center', (0, 0))
+            # Beyond the line = centre is above line_y AND within its x span
+            if cy < line_y and line_x1 <= cx <= line_x2:
+                occupied_now.add((cx // 60, cy // 60))
+
+        # Evict cells that are no longer occupied (vehicle moved / left)
+        for key in list(tracker.keys()):
+            if key not in occupied_now:
+                del tracker[key]
+
+        for key in occupied_now:
+            if key not in tracker:
+                tracker[key] = {"first_seen": current_time, "logged": False}
+                continue
+
+            entry = tracker[key]
+            if entry["logged"]:
+                continue
+
+            duration = current_time - entry["first_seen"]
+            if duration >= self.BLOCKING_INTERSECTION_SECONDS:
+                entry["logged"] = True
+                if hasattr(self, 'violation_controller') and self.violation_controller:
+                    self.violation_controller.save_violation(
+                        lane=lane_id,
+                        violation_type="Blocking Intersection",
+                        frame=frame
+                    )
+                    self.session_violations += 1
+                    self.logger.info(
+                        f"[BlockingIntersection] Lane {lane_id} ({direction.upper()}) "
+                        f"— vehicle beyond stop line for {duration:.0f}s"
+                    )
+                    self.root.after(0, lambda d=direction, lid=lane_id: (
+                        self.notification_manager.show(
+                            "Blocking Intersection",
+                            f"{d.title()} — Lane {lid}",
+                            "violation"
+                        )
+                    ))
+
+    def _check_prohibited_stopping(self, direction: str, lane_id: int,
+                                    detections: list, frame, current_time: float):
+        """
+        Track vehicles present in the intersection zone. If any vehicle
+        occupies the same grid cell continuously for PROHIBITED_STOP_SECONDS,
+        auto-capture the frame and log a Prohibited Stopping violation.
+        """
+        if frame is None:
+            return
+
+        h, w = frame.shape[:2]
+
+        # Intersection zone: central area of the frame around the stop line
+        zone_x1 = int(w * 0.15)
+        zone_x2 = int(w * 0.85)
+        zone_y1 = int(h * 0.25)
+        zone_y2 = int(h * 0.85)
+
+        vehicle_classes = {'car', 'truck', 'bus', 'motorcycle', 'jeepney'}
+        tracker = self._prohibited_stop_tracker[direction]
+
+        # Collect grid cells currently occupied by vehicles in the zone
+        occupied_now: set = set()
+        for det in detections:
+            if det.get('class_name') not in vehicle_classes:
+                continue
+            cx, cy = det.get('center', (0, 0))
+            if zone_x1 <= cx <= zone_x2 and zone_y1 <= cy <= zone_y2:
+                # 60-pixel grid so minor jitter doesn't reset the timer
+                occupied_now.add((cx // 60, cy // 60))
+
+        # Remove cells no longer occupied (vehicle moved / left)
+        for key in list(tracker.keys()):
+            if key not in occupied_now:
+                del tracker[key]
+
+        # Update or create entries for currently occupied cells
+        for key in occupied_now:
+            if key not in tracker:
+                tracker[key] = {"first_seen": current_time, "logged": False}
+                continue
+
+            entry = tracker[key]
+            if entry["logged"]:
+                continue
+
+            duration = current_time - entry["first_seen"]
+            if duration >= self.PROHIBITED_STOP_SECONDS:
+                entry["logged"] = True
+                if hasattr(self, 'violation_controller') and self.violation_controller:
+                    self.violation_controller.save_violation(
+                        lane=lane_id,
+                        violation_type="Prohibited Stopping",
+                        frame=frame
+                    )
+                    self.session_violations += 1
+                    self.logger.info(
+                        f"[ProhibitedStop] Lane {lane_id} ({direction.upper()}) "
+                        f"— vehicle stationary for {duration:.0f}s"
+                    )
+                    self.root.after(0, lambda d=direction, lid=lane_id: (
+                        self.notification_manager.show(
+                            "Prohibited Stopping",
+                            f"{d.title()} — Lane {lid}",
+                            "violation"
+                        )
+                    ))
+
+    def _check_wrong_way_driving(self, direction: str, lane_id: int,
+                                  detections: list, frame, current_time: float):
+        """
+        Detect vehicles moving against the expected lane flow direction.
+        Each camera has a defined inbound direction; a vehicle consistently
+        moving the opposite way for WRONG_WAY_CONFIRM_SECONDS is flagged.
+
+        Expected inbound flow (vehicle approaching intersection):
+          north → y increases (moves down in frame)
+          south → y decreases (moves up in frame)
+          east  → x decreases (moves left in frame)
+          west  → x increases (moves right in frame)
+        """
+        if frame is None:
+            return
+
+        # (axis, expected_sign) — sign of delta when vehicle moves correctly
+        flow = {'north': ('y', +1), 'south': ('y', -1),
+                'east':  ('x', -1), 'west':  ('x', +1)}
+        axis, expected_sign = flow[direction]
+
+        vehicle_classes = {'car', 'truck', 'bus', 'motorcycle', 'jeepney'}
+        tracker   = self._wrong_way_tracker[direction]
+        MATCH_PX  = 120   # max px to associate detection with existing track
+        MIN_SAMP  = 8     # minimum samples before direction is trusted
+        MIN_MOVE  = 40    # minimum total pixel displacement (filters stationary noise)
+
+        # ── match detections to existing tracks ──────────────────────────────
+        unmatched_centroids = []
+        matched_ids = set()
+
+        for det in detections:
+            if det.get('class_name') not in vehicle_classes:
+                continue
+            cx, cy = det.get('center', (0, 0))
+
+            best_id, best_dist = None, MATCH_PX
+            for tid, trk in tracker.items():
+                if tid in matched_ids:
+                    continue
+                dist = ((cx - trk['cx'])**2 + (cy - trk['cy'])**2) ** 0.5
+                if dist < best_dist:
+                    best_dist, best_id = dist, tid
+
+            if best_id is not None:
+                trk = tracker[best_id]
+                delta = (cx - trk['cx']) if axis == 'x' else (cy - trk['cy'])
+                trk['delta_sum'] += delta
+                trk['samples']   += 1
+                trk['cx'], trk['cy'] = cx, cy
+                trk['last_seen']  = current_time
+                matched_ids.add(best_id)
+            else:
+                unmatched_centroids.append((cx, cy))
+
+        # ── create tracks for new detections ─────────────────────────────────
+        for cx, cy in unmatched_centroids:
+            tid = self._wrong_way_next_id[direction]
+            self._wrong_way_next_id[direction] += 1
+            tracker[tid] = {
+                'cx': cx, 'cy': cy,
+                'delta_sum': 0.0, 'samples': 0,
+                'first_seen': current_time, 'last_seen': current_time,
+                'logged': False
+            }
+
+        # ── evict stale tracks ────────────────────────────────────────────────
+        for tid in [k for k, v in tracker.items() if current_time - v['last_seen'] > 2.0]:
+            del tracker[tid]
+
+        # ── evaluate direction for each mature track ──────────────────────────
+        for trk in tracker.values():
+            if trk['logged'] or trk['samples'] < MIN_SAMP:
+                continue
+            if abs(trk['delta_sum']) < MIN_MOVE:
+                continue
+
+            actual_sign = 1 if trk['delta_sum'] > 0 else -1
+            if actual_sign == expected_sign:
+                continue  # moving the right way
+
+            duration = current_time - trk['first_seen']
+            if duration < self.WRONG_WAY_CONFIRM_SECONDS:
+                continue
+
+            trk['logged'] = True
+            if hasattr(self, 'violation_controller') and self.violation_controller:
+                self.violation_controller.save_violation(
+                    lane=lane_id,
+                    violation_type="Wrong-way Driving",
+                    frame=frame
+                )
+                self.session_violations += 1
+                self.logger.info(
+                    f"[WrongWay] Lane {lane_id} ({direction.upper()}) "
+                    f"— vehicle moving against traffic flow"
+                )
+                lane_name = self.lane_names.get(lane_id, f'Lane {lane_id}')
+                self.root.after(0, lambda n=lane_name:
+                    self.notification_manager.show(
+                        "Wrong-way Driving",
+                        f"Vehicle going wrong way — {n}",
+                        "violation"
+                    ))
+
     def _rule_violation_screenshot(self, lane_id: int, frame):
         """
         Callback invoked by DQNRuleController when a pedestrian violation
@@ -990,9 +1345,9 @@ class MainController:
                     f"[RuleCtrl] Pedestrian violation screenshot saved — "
                     f"Lane {lane_id} ({direction.upper()})"
                 )
-                self.root.after(0, lambda: self.notification_manager.show(
+                self.root.after(0, lambda lid=lane_id: self.notification_manager.show(
                     "Pedestrian Violation",
-                    f"Jaywalker detected on Lane {lane_id}",
+                    f"Jaywalker — {self.lane_names.get(lid, f'Lane {lid}')}",
                     "violation"
                 ))
         except Exception as e:
